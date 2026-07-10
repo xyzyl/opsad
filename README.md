@@ -94,6 +94,19 @@ browse signals and channels, switch detectors and tune their parameters with liv
 re-scoring, move the threshold without recomputing, compare detections against
 ground-truth bands, and click any row of the anomaly table to zoom to that event.
 
+### Publish it as a website
+
+`sigmaflow dashboard --export site` writes a static version (~1 MB, precomputed
+scores; thresholding, metrics, and interpretation run in the browser) that
+deploys to Cloudflare Pages in one command:
+
+```bash
+npx wrangler pages deploy site --project-name sigmaflow
+```
+
+See [docs/deploying.md](docs/deploying.md) for details, including how to host
+the fully live app on a Python platform instead.
+
 ## Documentation
 
 - [Getting started tutorial](docs/tutorials/getting_started.md)

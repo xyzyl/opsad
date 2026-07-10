@@ -145,19 +145,35 @@ def evaluate(data_file, labels, detector, pipeline, params, time_column):
               help="Detector selected when the dashboard opens.")
 @click.option("--port", default=8050, show_default=True, help="HTTP port.")
 @click.option("--time-column", help="Name of the time column for CSV input.")
-def dashboard(data_file, detector, port, time_column):
+@click.option("--export", "export_dir", type=click.Path(file_okay=False),
+              help="Instead of serving, write a deployable static site "
+                   "(Cloudflare Pages, GitHub Pages, ...) to this directory.")
+def dashboard(data_file, detector, port, time_column, export_dir):
     """Launch the interactive dashboard (needs sigmaflow[dashboard]).
 
     DATA_FILE (CSV or HDF5) is optional; the built-in synthetic demo
-    signals are always available in the signal browser.
+    signals are always available in the signal browser. With --export,
+    a static version with precomputed scores is written instead of
+    starting a server.
     """
+    signal = _load_signal(data_file, time_column) if data_file else None
+
+    if export_dir:
+        from ..viz.static_export import export_static_site
+
+        signals = {signal.name or "user signal": signal} if signal is not None else None
+        out = export_static_site(export_dir, signals)
+        click.echo(f"static site written to {out}")
+        click.echo("deploy it with: npx wrangler pages deploy "
+                   f"{out} --project-name <your-project>")
+        return
+
     try:
         from ..viz.dashboard import launch_dashboard
     except ImportError:
         raise click.ClickException(
             "the dashboard needs optional dependencies: pip install sigmaflow[dashboard]"
         )
-    signal = _load_signal(data_file, time_column) if data_file else None
     click.echo(f"sigmaflow dashboard on http://127.0.0.1:{port}")
     launch_dashboard(signal=signal, detector=detector, port=port)
 

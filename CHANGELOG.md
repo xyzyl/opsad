@@ -20,3 +20,7 @@ Initial MVP release.
   signal, detector, and threshold in lay terms, characterizes the strongest
   detected event (spike / flat-line / sustained shift / noise burst), and maps
   it to its domain-specific and cross-domain significance.
+- Static site export (`sigmaflow dashboard --export DIR`): a deployable ~1 MB
+  static dashboard (Cloudflare Pages, GitHub Pages, any static host) with
+  precomputed scores; thresholding, metrics, table, and narrative run
+  client-side. See docs/deploying.md.
