@@ -1,0 +1,2 @@
+[console_scripts]
+sigmaflow = sigmaflow.cli.main:cli
