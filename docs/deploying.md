@@ -5,19 +5,27 @@ The interactive dashboard has two deployment stories:
 ## 1. Static site — Cloudflare Pages (or any static host)
 
 Cloudflare Pages serves static files; it cannot run the Python (Dash/Flask)
-server. So sigmaflow exports a **static version** of the dashboard:
-detection scores for every signal x detector pair are precomputed into JSON,
-and the threshold control, metrics, anomaly table, and plain-language
-interpretation all run client-side in the browser. The one thing a static
-site can't do is *re-fit* a detector with new parameters — that needs Python.
+server. So sigmaflow exports a **static version** of the dashboard: the four
+live open-data feeds (NOAA solar wind, NDBC buoy, GOES magnetometer, Elexon
+GB grid frequency) are fetched at build time, detection scores for every
+signal x detector pair are precomputed into JSON, and the threshold control,
+metrics, anomaly table, and plain-language interpretation all run client-side
+in the browser. Each signal shows its source and fetch timestamp. The one
+thing a static site can't do is *re-fit* a detector with new parameters —
+that needs Python.
 
 ### Build the site
 
 ```bash
 sigmaflow dashboard --export site
-# add your own signal to the browser alongside the demos:
+# add your own signal to the browser alongside the live feeds:
 sigmaflow dashboard my_data.h5 --export site
 ```
+
+Re-running the export refreshes the data snapshot; redeploying publishes it.
+(To automate daily refreshes later: any scheduler that runs these two
+commands works — GitHub Actions cron is the usual choice once the repo is on
+GitHub.)
 
 This writes a fully self-contained `site/` directory (~1 MB): `index.html`
 plus one JSON per signal under `data/`.

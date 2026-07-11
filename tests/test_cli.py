@@ -30,9 +30,11 @@ def csv_files(tmp_path):
 
 
 def test_version(runner):
+    import sigmaflow
+
     result = runner.invoke(cli, ["--version"])
     assert result.exit_code == 0
-    assert "0.1.0" in result.output
+    assert sigmaflow.__version__ in result.output
 
 
 def test_detect_csv(runner, csv_files):

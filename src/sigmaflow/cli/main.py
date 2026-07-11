@@ -148,21 +148,28 @@ def evaluate(data_file, labels, detector, pipeline, params, time_column):
 @click.option("--export", "export_dir", type=click.Path(file_okay=False),
               help="Instead of serving, write a deployable static site "
                    "(Cloudflare Pages, GitHub Pages, ...) to this directory.")
-def dashboard(data_file, detector, port, time_column, export_dir):
+@click.option("--live/--no-live", default=True, show_default=True,
+              help="Fetch the live open-data sources (NOAA, Elexon) for the "
+                   "signal browser / exported site.")
+def dashboard(data_file, detector, port, time_column, export_dir, live):
     """Launch the interactive dashboard (needs sigmaflow[dashboard]).
 
-    DATA_FILE (CSV or HDF5) is optional; the built-in synthetic demo
-    signals are always available in the signal browser. With --export,
-    a static version with precomputed scores is written instead of
-    starting a server.
+    DATA_FILE (CSV or HDF5) is optional; live open-data signals (solar
+    wind, ocean buoy, GOES magnetometer, GB grid frequency) fill the
+    signal browser. With --export, a static version with precomputed
+    scores is written instead of starting a server.
     """
     signal = _load_signal(data_file, time_column) if data_file else None
 
     if export_dir:
+        from ..data import SourceUnavailable
         from ..viz.static_export import export_static_site
 
         signals = {signal.name or "user signal": signal} if signal is not None else None
-        out = export_static_site(export_dir, signals)
+        try:
+            out = export_static_site(export_dir, signals, live=live)
+        except SourceUnavailable as exc:
+            raise click.ClickException(str(exc))
         click.echo(f"static site written to {out}")
         click.echo("deploy it with: npx wrangler pages deploy "
                    f"{out} --project-name <your-project>")
@@ -175,7 +182,7 @@ def dashboard(data_file, detector, port, time_column, export_dir):
             "the dashboard needs optional dependencies: pip install sigmaflow[dashboard]"
         )
     click.echo(f"sigmaflow dashboard on http://127.0.0.1:{port}")
-    launch_dashboard(signal=signal, detector=detector, port=port)
+    launch_dashboard(signal=signal, detector=detector, port=port, live=live)
 
 
 def main():  # pragma: no cover

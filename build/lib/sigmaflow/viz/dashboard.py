@@ -66,7 +66,260 @@ DETECTOR_PARAMS: dict[str, list[tuple]] = {
     ],
 }
 
+# deep detectors appear when the optional torch dependency is installed
+try:
+    from ..detectors import AutoencoderDetector  # noqa: F401
+
+    DETECTOR_PARAMS.update({
+        "autoencoder": [
+            ("latent_dim", "int", 16, "bottleneck size"),
+            ("window_size", "int", 64, "reconstruction window in samples"),
+            ("epochs", "int", 15, "training epochs (more = slower, tighter fit)"),
+        ],
+        "lstm_autoencoder": [
+            ("lstm_hidden_size", "int", 64, "LSTM hidden units"),
+            ("window_size", "int", 64, "reconstruction window in samples"),
+            ("epochs", "int", 10, "training epochs"),
+        ],
+        "transformer": [
+            ("d_model", "int", 64, "model width"),
+            ("n_layers", "int", 2, "encoder layers"),
+            ("window_size", "int", 64, "reconstruction window in samples"),
+            ("epochs", "int", 10, "training epochs"),
+        ],
+    })
+except ImportError:
+    pass
+
 MAX_PLOT_POINTS = 20_000  # decimate longer signals for display only
+
+# ---------------------------------------------------------------------- #
+# Plain-language interpretation
+# ---------------------------------------------------------------------- #
+
+DETECTOR_EXPLAINERS = {
+    "autoencoder": "is a small neural network trained to redraw normal stretches of this "
+                   "signal from memory — moments it can't redraw well are unusual",
+    "lstm_autoencoder": "is a neural network that learns the normal *order* of events in "
+                        "this signal — sequences that unfold in an unfamiliar order "
+                        "reconstruct poorly and get flagged",
+    "transformer": "is an attention-based neural network that learns how distant parts "
+                   "of a normal window relate — windows whose internal structure breaks "
+                   "those relationships reconstruct poorly",
+    "ensemble": "combines several detectors' opinions, so point spikes and slow drifts "
+                "get caught at the same time",
+    "zscore": "measures how far each reading sits from the signal's average, "
+              "in units of its usual wobble — points far outside that wobble get flagged",
+    "modified_zscore": "measures how far each reading sits from the signal's typical value, "
+                       "using the median so a few wild readings can't skew what counts as normal",
+    "cusum": "adds up small persistent deviations over time, so it notices slow shifts "
+             "(drift, degradation) that no single reading would reveal",
+    "stl_residual": "first strips away the signal's repeating rhythm (daily, seasonal, "
+                    "orbital…), then flags only what departs from that rhythm",
+    "isolation_forest": "asks, for every moment, how few yes/no questions it takes to single "
+                        "it out from the rest — moments that are easy to isolate are unusual",
+    "lof": "compares each moment with its nearest look-alikes and flags those sitting in "
+           "sparse neighborhoods — normal globally, but odd for their context",
+}
+
+CHANNEL_DESCRIPTIONS = {
+    "n_e": "electron density (how densely packed the plasma's charged particles are)",
+    "T_e": "electron temperature",
+    "temperature": "water temperature",
+    "salinity": "salinity (dissolved salt content)",
+    "value": "a sensor reading",
+    # live open-data channels
+    "water_temperature": "sea surface temperature",
+    "air_temperature": "air temperature at the buoy",
+    "pressure": "sea-level air pressure",
+    "proton_density": "solar wind proton density (how much plasma is streaming past)",
+    "proton_speed": "solar wind speed",
+    "proton_temperature": "solar wind proton temperature",
+    "Hp": "the north-south magnetic field at the satellite",
+    "He": "the earthward magnetic field at the satellite",
+    "Hn": "the eastward magnetic field at the satellite",
+    "total": "total magnetic field strength at the satellite",
+    "frequency": "grid frequency — the heartbeat of the power system, "
+                 "which drops when demand outruns supply",
+}
+
+# what each anomaly *shape* usually means, per domain and across domains
+DOMAIN_MEANING = {
+    "plasma": {
+        "spike": "a momentary plasma density or speed impulse — often a shock or "
+                 "discontinuity sweeping past the instrument, sometimes a telemetry glitch",
+        "flat": "the instrument saturating or holding its last value — an artifact, "
+                "not a real plasma state",
+        "shift": "a genuine change of plasma regime — a coronal-mass-ejection front or "
+                 "high-speed stream arriving, or in a tokamak, a growing instability "
+                 "watched as a disruption precursor",
+        "noisy": "turbulent or disturbed plasma conditions — or interference on the "
+                 "measurement chain",
+    },
+    "ocean": {
+        "spike": "a single bad reading — debris, a passing vessel, or a seabird on the buoy",
+        "flat": "a stuck or iced-over sensor",
+        "shift": "either a real ocean event (a marine heatwave, an upwelling change) or "
+                 "slow sensor drift from biofouling — the tell is whether neighboring "
+                 "instruments agree",
+        "noisy": "storm or wave action contaminating the record",
+    },
+    "satellite": {
+        "spike": "a sudden disturbance at the spacecraft — a geomagnetic impulse, "
+                 "thruster firing, or micrometeoroid hit",
+        "flat": "a stuck telemetry channel or a value held during safe mode",
+        "shift": "a sustained change of the spacecraft's environment — a geomagnetic "
+                 "storm compressing the field, or a thermal/orbital season change",
+        "noisy": "attitude jitter or electromagnetic interference on the instrument",
+    },
+    "energy": {
+        "spike": "a sudden frequency excursion — typically a large generator or "
+                 "interconnector tripping offline",
+        "flat": "a stuck meter or frozen data feed",
+        "shift": "a sustained supply–demand imbalance: below nominal means the grid "
+                 "lost generation, above nominal means it lost demand",
+        "noisy": "disturbed system conditions or measurement interference",
+    },
+    None: {
+        "spike": "an isolated glitch in the measurement chain",
+        "flat": "a saturated or stuck sensor",
+        "shift": "a genuine change in the system being measured — or a calibration jump",
+        "noisy": "an interference burst",
+    },
+}
+
+CROSS_DOMAIN = {
+    "spike": "A one-sample spike like this is the universal instrument glitch: it shows up "
+             "as cosmic-ray hits in satellite telemetry, voltage transients on grid sensors, "
+             "and dropouts in ocean records.",
+    "flat": "A flat-lined stretch is the cross-domain signature of a saturated sensor — a "
+            "plasma probe at its ceiling, a frozen buoy, a clipped telemetry channel all "
+            "look exactly like this.",
+    "shift": "A sustained shift is the same signature a tokamak team watches for as a "
+             "disruption precursor, an oceanographer reads as a marine heatwave, and a grid "
+             "operator sees when a generator trips offline.",
+    "noisy": "A burst of noise looks the same everywhere: RF pickup in a physics lab, storm "
+             "chop at sea, radio interference on a satellite downlink.",
+}
+
+
+def _fmt_time(t, datetime_index: bool) -> str:
+    if datetime_index:
+        import pandas as pd
+
+        return pd.Timestamp(t).strftime("%b %d, %H:%M")
+    return f"t = {float(t):.4g} s"
+
+
+def _fmt_duration(seconds: float) -> str:
+    if seconds >= 172800:
+        return f"{seconds / 86400:.0f} days"
+    if seconds >= 5400:
+        return f"{seconds / 3600:.3g} hours"
+    if seconds >= 120:
+        return f"{seconds / 60:.3g} minutes"
+    return f"{seconds:.4g} seconds"
+
+
+# event-shape classification is shared with the domain adapters
+from ..domains.base import characterize_interval  # noqa: E402  (re-export)
+
+
+_CHARACTER_PHRASES = {
+    "spike": "jumped for a single instant, then returned to normal",
+    "flat": "flat-lined at a constant value",
+    "shift": "moved away from its typical level and stayed there",
+    "noisy": "became far noisier than usual",
+}
+
+
+def build_narrative(sf: SignalFrame, channel: str, detector_name: str,
+                    scores: np.ndarray, threshold: float,
+                    labels: np.ndarray) -> list[str]:
+    """Plain-language paragraphs explaining what the dashboard currently shows."""
+    import pandas as pd
+
+    values = sf[channel].to_numpy()
+    secs = time_to_seconds(sf.time)
+    is_dt = isinstance(sf.time, pd.DatetimeIndex)
+    domain = sf.domain if sf.domain in DOMAIN_MEANING else None
+    paragraphs = []
+
+    # 1 — what the data is
+    what = CHANNEL_DESCRIPTIONS.get(channel, f"the '{channel}' channel")
+    unit = sf.units.get(channel)
+    src = f" by a {sf.instrument.replace('_', ' ')}" if sf.instrument else ""
+    rate = sf.sample_rate
+    rate_str = (f", one reading every {_fmt_duration(1 / rate)}" if rate and rate < 1
+                else f" at {rate:,.0f} readings per second" if rate else "")
+    para1 = (
+        f"This chart shows {_fmt_duration(sf.duration)} of {what}"
+        f"{f', in {unit},' if unit else ''} recorded{src}"
+        f" — {len(sf):,} measurements{rate_str}."
+    )
+    source = sf.metadata.get("source")
+    if source:
+        fetched = sf.metadata.get("fetched_at")
+        para1 += (f" This is real, live data from {source}"
+                  + (f", fetched {fetched}." if fetched else "."))
+    paragraphs.append(para1)
+
+    # 2 — what the detector and threshold are doing
+    explainer = DETECTOR_EXPLAINERS.get(detector_name, "scores each moment by how unusual it is")
+    n_flagged = int(labels.sum())
+    pct = 100.0 * n_flagged / len(labels) if len(labels) else 0.0
+    events = labels_to_intervals(labels, sf.time, scores)
+    paragraphs.append(
+        f"The {detector_name.replace('_', ' ')} detector {explainer}. "
+        f"The dashed red line in the lower chart is the alarm bar: every moment scoring "
+        f"above it is declared an anomaly. At the current setting, {pct:.2f}% of all "
+        f"readings clear it, grouped into {len(events)} distinct event"
+        f"{'s' if len(events) != 1 else ''}."
+    )
+
+    # 3 — what was found and what it implies (strongest event)
+    if events:
+        start, end, severity = max(events, key=lambda e: e[2])
+        i0 = sf.time.get_indexer([start])[0]
+        i1 = sf.time.get_indexer([end])[0]
+        character = characterize_interval(values, i0, i1)
+        when = _fmt_time(start, is_dt)
+        span = secs[i1] - secs[i0]
+        span_str = f" for about {_fmt_duration(span)}" if span > 0 else ""
+        meaning = DOMAIN_MEANING[domain][character]
+        domain_name = domain or "general instrumentation"
+        paragraphs.append(
+            f"The strongest event is around {when}, where the signal "
+            f"{_CHARACTER_PHRASES[character]}{span_str}. In {domain_name} terms, that "
+            f"pattern most often means {meaning}. {CROSS_DOMAIN[character]}"
+        )
+    else:
+        paragraphs.append(
+            "Nothing currently clears the alarm bar — either this stretch of data is "
+            "genuinely unremarkable, or the bar is set too high. Try the percentile "
+            "threshold method with a value like 99 to surface the most unusual 1%."
+        )
+
+    # 4 — scoreboard against ground truth, when available
+    if sf.anomaly_labels is not None:
+        truth_events = labels_to_intervals(sf.anomaly_labels, sf.time)
+        m = evaluate(labels, sf.anomaly_labels)
+        caught = round(m["event_recall"] * len(truth_events))
+        sentence = (
+            f"This signal comes with an answer key: {len(truth_events)} genuine "
+            f"anomal{'ies were' if len(truth_events) != 1 else 'y was'} planted in it, and "
+            f"the detector currently catches {caught} of {len(truth_events)} "
+            f"(the pale blue bands mark where they really are)."
+        )
+        if m["event_recall"] < 1.0:
+            sentence += (" Lowering the alarm bar would catch more — at the price of more "
+                         "false alarms on ordinary wiggles.")
+        elif m["fpr"] > 0.05:
+            sentence += (" It also flags a fair number of ordinary moments, though — "
+                         "raising the alarm bar would cut those false alarms.")
+        paragraphs.append(sentence)
+
+    return paragraphs
 
 
 # ---------------------------------------------------------------------- #
@@ -86,7 +339,12 @@ def demo_signals() -> dict[str, SignalFrame]:
             duration=5.0, sample_rate=2000
         ),
         "ocean: synthetic buoy temperature": generate_ocean_temperature(
-            duration_days=180, samples_per_day=24
+            duration_days=180, samples_per_day=24,
+            anomalies=[
+                {"type": "marine_heatwave", "start_day": 40, "end_day": 41.5,
+                 "magnitude": 4.0},
+                {"type": "sensor_drift", "start_day": 120, "rate_per_day": 0.05},
+            ],
         ),
         "generic: noise + spike + level shift": generate_generic_signal(
             n=2000,
@@ -291,9 +549,15 @@ def metric_tiles(sf: SignalFrame, labels: np.ndarray, scores: np.ndarray) -> lis
 # ---------------------------------------------------------------------- #
 
 def create_app(signals: dict[str, SignalFrame] | None = None,
-               default_detector: str = "isolation_forest"):
-    """Build the Dash app. ``signals`` maps browser names to SignalFrames;
-    the synthetic demos are appended so the browser is never empty."""
+               default_detector: str = "isolation_forest",
+               live: bool = True):
+    """Build the Dash app.
+
+    ``signals`` maps browser names to SignalFrames. With ``live=True``
+    (default) the four live open-data sources are fetched and added;
+    only if nothing else is available do the clearly-labeled synthetic
+    demos fill the browser (e.g. offline development).
+    """
     try:
         import dash_bootstrap_components as dbc
         from dash import ALL, Dash, Input, Output, State, dash_table, dcc, html
@@ -303,8 +567,12 @@ def create_app(signals: dict[str, SignalFrame] | None = None,
         ) from exc
 
     registry: dict[str, SignalFrame] = dict(signals or {})
-    for name, sf in demo_signals().items():
-        registry.setdefault(name, sf)
+    if live:
+        from ..data import fetch_all_live
+
+        registry.update(fetch_all_live())
+    if not registry:  # offline fallback so the app still opens
+        registry = demo_signals()
     first_signal = next(iter(registry))
 
     app = Dash(
@@ -370,6 +638,16 @@ def create_app(signals: dict[str, SignalFrame] | None = None,
                            "gap": "16px"}, children=[
         html.Div(id="tiles", style={"display": "flex", "gap": "12px",
                                     "flexWrap": "wrap"}),
+        html.Div(style=card_style, children=[
+            html.Div("what is this showing?", style={
+                "fontSize": "0.72rem", "textTransform": "uppercase",
+                "letterSpacing": "0.06em", "color": C["muted"],
+                "marginBottom": "6px"}),
+            html.Div(id="narrative", style={"fontSize": "0.88rem",
+                                            "lineHeight": "1.55",
+                                            "color": C["ink2"],
+                                            "maxWidth": "72ch"}),
+        ]),
         html.Div(style=card_style, children=[
             dcc.Graph(id="main-graph", style={"width": "100%"},
                       config={"displaylogo": False, "responsive": True}),
@@ -472,6 +750,7 @@ def create_app(signals: dict[str, SignalFrame] | None = None,
         Output("hist-graph", "figure"),
         Output("anomaly-table", "data"),
         Output("tiles", "children"),
+        Output("narrative", "children"),
         Input("score-store", "data"),
         Input("threshold-method", "value"),
         Input("threshold-value", "value"),
@@ -486,7 +765,7 @@ def create_app(signals: dict[str, SignalFrame] | None = None,
 
         if not data:
             empty = _base_layout(go.Figure())
-            return empty, empty, [], []
+            return empty, empty, [], [], []
         sf = registry[data["signal"]]
         if channel not in sf.channels:
             channel = sf.channels[0]
@@ -530,21 +809,28 @@ def create_app(signals: dict[str, SignalFrame] | None = None,
             ])
             for label, val in metric_tiles(sf, labels, scores)
         ]
-        return main_fig, hist_fig, records, tile_divs
+
+        paragraphs = build_narrative(sf, channel, data["detector"], scores,
+                                     threshold, labels)
+        narrative = [html.P(p, style={"margin": "0 0 8px 0"}) for p in paragraphs]
+
+        return main_fig, hist_fig, records, tile_divs, narrative
 
     return app
 
 
 def launch_dashboard(signal: SignalFrame | None = None,
                      detector: str = "isolation_forest",
-                     port: int = 8050, debug: bool = False) -> None:
+                     port: int = 8050, debug: bool = False,
+                     live: bool = True) -> None:
     """Launch the interactive dashboard in a local web server.
 
     ``signal`` (optional) is added to the signal browser alongside the
-    built-in synthetic demos and selected by default.
+    live open-data sources and selected by default. ``live=False`` skips
+    the network fetch (synthetic demos fill the browser instead).
     """
     signals = {}
     if signal is not None:
         signals[signal.name or "user signal"] = signal
-    app = create_app(signals, default_detector=detector)
+    app = create_app(signals, default_detector=detector, live=live)
     app.run(port=port, debug=debug)

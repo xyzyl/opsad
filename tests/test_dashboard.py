@@ -111,7 +111,7 @@ def test_figures_build(simple_signal):
 def test_create_app_layout(simple_signal):
     from sigmaflow.viz.dashboard import create_app
 
-    app = create_app({"my signal": simple_signal})
+    app = create_app({"my signal": simple_signal}, live=False)
     layout = str(app.layout)
     for component_id in ("signal-select", "detector-select", "score-store",
                         "main-graph", "hist-graph", "anomaly-table", "run-button"):

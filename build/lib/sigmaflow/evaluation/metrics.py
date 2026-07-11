@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import numpy as np
 
-__all__ = ["evaluate", "point_metrics", "event_metrics", "score_metrics"]
+__all__ = ["evaluate", "point_metrics", "event_metrics", "score_metrics",
+           "range_metrics"]
 
 
 def _runs(labels: np.ndarray) -> list[tuple[int, int]]:
@@ -136,6 +137,58 @@ def score_metrics(scores: np.ndarray, truth: np.ndarray) -> dict[str, float]:
     }
 
 
+def range_metrics(
+    predicted: np.ndarray, truth: np.ndarray, alpha: float = 0.5
+) -> dict[str, float]:
+    """Range-based precision/recall (after Tatbul et al., NeurIPS 2018),
+    with a flat positional bias.
+
+    Point metrics punish a detection that covers only part of a long
+    anomaly as if it missed; range metrics give partial credit:
+
+    - ``range_recall``: per true range, ``alpha`` for being detected at
+      all plus ``(1 - alpha)`` times the fraction of it covered.
+    - ``range_precision``: per predicted range, the fraction of it that
+      lies inside real anomalies.
+    """
+    if not 0 <= alpha <= 1:
+        raise ValueError("alpha must be in [0, 1]")
+    pred_events = _runs(np.asarray(predicted))
+    true_events = _runs(np.asarray(truth))
+
+    def _covered(target: tuple[int, int], others: list[tuple[int, int]]) -> float:
+        length = target[1] - target[0] + 1
+        covered = 0
+        for o in others:
+            lo, hi = max(target[0], o[0]), min(target[1], o[1])
+            if lo <= hi:
+                covered += hi - lo + 1
+        return covered / length
+
+    if true_events:
+        recalls = []
+        for t in true_events:
+            overlap = _covered(t, pred_events)
+            existence = 1.0 if overlap > 0 else 0.0
+            recalls.append(alpha * existence + (1 - alpha) * overlap)
+        range_recall = float(np.mean(recalls))
+    else:
+        range_recall = 0.0
+
+    if pred_events:
+        range_precision = float(np.mean([_covered(p, true_events) for p in pred_events]))
+    else:
+        range_precision = 0.0
+
+    denom = range_precision + range_recall
+    range_f1 = 2 * range_precision * range_recall / denom if denom else 0.0
+    return {
+        "range_precision": range_precision,
+        "range_recall": range_recall,
+        "range_f1": range_f1,
+    }
+
+
 def evaluate(result, ground_truth: np.ndarray) -> dict[str, float]:
     """Evaluate a detection result against ground-truth labels.
 
@@ -159,6 +212,7 @@ def evaluate(result, ground_truth: np.ndarray) -> dict[str, float]:
     metrics = {}
     metrics.update(point_metrics(predicted, truth))
     metrics.update(event_metrics(predicted, truth, time_seconds))
+    metrics.update(range_metrics(predicted, truth))
     if scores is not None:
         metrics.update(score_metrics(scores, truth))
     return metrics

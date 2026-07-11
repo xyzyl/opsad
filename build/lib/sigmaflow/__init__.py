@@ -3,10 +3,12 @@
 from .core.anomaly_result import AnomalyResult
 from .core.pipeline import Pipeline
 from .core.signal_frame import SignalFrame
+from .streaming import StreamingDetector
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
-__all__ = ["SignalFrame", "AnomalyResult", "Pipeline", "detect", "__version__"]
+__all__ = ["SignalFrame", "AnomalyResult", "Pipeline", "StreamingDetector",
+           "detect", "__version__"]
 
 
 def detect(signal: SignalFrame, method: str = "isolation_forest", **params) -> AnomalyResult:

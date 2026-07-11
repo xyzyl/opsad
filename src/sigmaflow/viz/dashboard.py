@@ -66,6 +66,31 @@ DETECTOR_PARAMS: dict[str, list[tuple]] = {
     ],
 }
 
+# deep detectors appear when the optional torch dependency is installed
+try:
+    from ..detectors import AutoencoderDetector  # noqa: F401
+
+    DETECTOR_PARAMS.update({
+        "autoencoder": [
+            ("latent_dim", "int", 16, "bottleneck size"),
+            ("window_size", "int", 64, "reconstruction window in samples"),
+            ("epochs", "int", 15, "training epochs (more = slower, tighter fit)"),
+        ],
+        "lstm_autoencoder": [
+            ("lstm_hidden_size", "int", 64, "LSTM hidden units"),
+            ("window_size", "int", 64, "reconstruction window in samples"),
+            ("epochs", "int", 10, "training epochs"),
+        ],
+        "transformer": [
+            ("d_model", "int", 64, "model width"),
+            ("n_layers", "int", 2, "encoder layers"),
+            ("window_size", "int", 64, "reconstruction window in samples"),
+            ("epochs", "int", 10, "training epochs"),
+        ],
+    })
+except ImportError:
+    pass
+
 MAX_PLOT_POINTS = 20_000  # decimate longer signals for display only
 
 # ---------------------------------------------------------------------- #
@@ -73,6 +98,16 @@ MAX_PLOT_POINTS = 20_000  # decimate longer signals for display only
 # ---------------------------------------------------------------------- #
 
 DETECTOR_EXPLAINERS = {
+    "autoencoder": "is a small neural network trained to redraw normal stretches of this "
+                   "signal from memory — moments it can't redraw well are unusual",
+    "lstm_autoencoder": "is a neural network that learns the normal *order* of events in "
+                        "this signal — sequences that unfold in an unfamiliar order "
+                        "reconstruct poorly and get flagged",
+    "transformer": "is an attention-based neural network that learns how distant parts "
+                   "of a normal window relate — windows whose internal structure breaks "
+                   "those relationships reconstruct poorly",
+    "ensemble": "combines several detectors' opinions, so point spikes and slow drifts "
+                "get caught at the same time",
     "zscore": "measures how far each reading sits from the signal's average, "
               "in units of its usual wobble — points far outside that wobble get flagged",
     "modified_zscore": "measures how far each reading sits from the signal's typical value, "
@@ -93,24 +128,57 @@ CHANNEL_DESCRIPTIONS = {
     "temperature": "water temperature",
     "salinity": "salinity (dissolved salt content)",
     "value": "a sensor reading",
+    # live open-data channels
+    "water_temperature": "sea surface temperature",
+    "air_temperature": "air temperature at the buoy",
+    "pressure": "sea-level air pressure",
+    "proton_density": "solar wind proton density (how much plasma is streaming past)",
+    "proton_speed": "solar wind speed",
+    "proton_temperature": "solar wind proton temperature",
+    "Hp": "the north-south magnetic field at the satellite",
+    "He": "the earthward magnetic field at the satellite",
+    "Hn": "the eastward magnetic field at the satellite",
+    "total": "total magnetic field strength at the satellite",
+    "frequency": "grid frequency — the heartbeat of the power system, "
+                 "which drops when demand outruns supply",
 }
 
 # what each anomaly *shape* usually means, per domain and across domains
 DOMAIN_MEANING = {
     "plasma": {
-        "spike": "electrical pickup or a momentary probe glitch",
-        "flat": "the probe saturating — it hit the ceiling of what it can measure, "
-                "so this is an instrument artifact, not a real plasma value",
-        "shift": "a growing instability in the plasma — the kind of pattern monitored "
-                 "as a disruption precursor in fusion experiments",
-        "noisy": "interference, e.g. RF pickup from the machine's heating systems",
+        "spike": "a momentary plasma density or speed impulse — often a shock or "
+                 "discontinuity sweeping past the instrument, sometimes a telemetry glitch",
+        "flat": "the instrument saturating or holding its last value — an artifact, "
+                "not a real plasma state",
+        "shift": "a genuine change of plasma regime — a coronal-mass-ejection front or "
+                 "high-speed stream arriving, or in a tokamak, a growing instability "
+                 "watched as a disruption precursor",
+        "noisy": "turbulent or disturbed plasma conditions — or interference on the "
+                 "measurement chain",
     },
     "ocean": {
         "spike": "a single bad reading — debris, a passing vessel, or a seabird on the buoy",
         "flat": "a stuck or iced-over sensor",
-        "shift": "either a real ocean event (a marine heatwave) or slow sensor drift from "
-                 "biofouling — the tell is whether neighboring instruments agree",
+        "shift": "either a real ocean event (a marine heatwave, an upwelling change) or "
+                 "slow sensor drift from biofouling — the tell is whether neighboring "
+                 "instruments agree",
         "noisy": "storm or wave action contaminating the record",
+    },
+    "satellite": {
+        "spike": "a sudden disturbance at the spacecraft — a geomagnetic impulse, "
+                 "thruster firing, or micrometeoroid hit",
+        "flat": "a stuck telemetry channel or a value held during safe mode",
+        "shift": "a sustained change of the spacecraft's environment — a geomagnetic "
+                 "storm compressing the field, or a thermal/orbital season change",
+        "noisy": "attitude jitter or electromagnetic interference on the instrument",
+    },
+    "energy": {
+        "spike": "a sudden frequency excursion — typically a large generator or "
+                 "interconnector tripping offline",
+        "flat": "a stuck meter or frozen data feed",
+        "shift": "a sustained supply–demand imbalance: below nominal means the grid "
+                 "lost generation, above nominal means it lost demand",
+        "noisy": "disturbed system conditions or measurement interference",
     },
     None: {
         "spike": "an isolated glitch in the measurement chain",
@@ -153,22 +221,8 @@ def _fmt_duration(seconds: float) -> str:
     return f"{seconds:.4g} seconds"
 
 
-def characterize_interval(values: np.ndarray, i0: int, i1: int) -> str:
-    """Classify what the signal did inside a detected interval:
-    'spike', 'flat', 'shift', or 'noisy'."""
-    seg = values[i0 : i1 + 1]
-    med = float(np.median(values))
-    mad = float(np.median(np.abs(values - med))) or float(np.std(values)) or 1.0
-    scale = 1.4826 * mad
-    if len(seg) >= 4 and np.ptp(seg) < 1e-12 * max(1.0, abs(float(seg[0]))):
-        return "flat"
-    if len(seg) <= 3:
-        return "spike"
-    if float(np.std(seg)) > 3.0 * scale:
-        return "noisy"
-    if abs(float(np.mean(seg)) - med) > 1.5 * scale:
-        return "shift"
-    return "shift"
+# event-shape classification is shared with the domain adapters
+from ..domains.base import characterize_interval  # noqa: E402  (re-export)
 
 
 _CHARACTER_PHRASES = {
@@ -198,11 +252,17 @@ def build_narrative(sf: SignalFrame, channel: str, detector_name: str,
     rate = sf.sample_rate
     rate_str = (f", one reading every {_fmt_duration(1 / rate)}" if rate and rate < 1
                 else f" at {rate:,.0f} readings per second" if rate else "")
-    paragraphs.append(
+    para1 = (
         f"This chart shows {_fmt_duration(sf.duration)} of {what}"
         f"{f', in {unit},' if unit else ''} recorded{src}"
         f" — {len(sf):,} measurements{rate_str}."
     )
+    source = sf.metadata.get("source")
+    if source:
+        fetched = sf.metadata.get("fetched_at")
+        para1 += (f" This is real, live data from {source}"
+                  + (f", fetched {fetched}." if fetched else "."))
+    paragraphs.append(para1)
 
     # 2 — what the detector and threshold are doing
     explainer = DETECTOR_EXPLAINERS.get(detector_name, "scores each moment by how unusual it is")
@@ -489,9 +549,15 @@ def metric_tiles(sf: SignalFrame, labels: np.ndarray, scores: np.ndarray) -> lis
 # ---------------------------------------------------------------------- #
 
 def create_app(signals: dict[str, SignalFrame] | None = None,
-               default_detector: str = "isolation_forest"):
-    """Build the Dash app. ``signals`` maps browser names to SignalFrames;
-    the synthetic demos are appended so the browser is never empty."""
+               default_detector: str = "isolation_forest",
+               live: bool = True):
+    """Build the Dash app.
+
+    ``signals`` maps browser names to SignalFrames. With ``live=True``
+    (default) the four live open-data sources are fetched and added;
+    only if nothing else is available do the clearly-labeled synthetic
+    demos fill the browser (e.g. offline development).
+    """
     try:
         import dash_bootstrap_components as dbc
         from dash import ALL, Dash, Input, Output, State, dash_table, dcc, html
@@ -501,8 +567,12 @@ def create_app(signals: dict[str, SignalFrame] | None = None,
         ) from exc
 
     registry: dict[str, SignalFrame] = dict(signals or {})
-    for name, sf in demo_signals().items():
-        registry.setdefault(name, sf)
+    if live:
+        from ..data import fetch_all_live
+
+        registry.update(fetch_all_live())
+    if not registry:  # offline fallback so the app still opens
+        registry = demo_signals()
     first_signal = next(iter(registry))
 
     app = Dash(
@@ -751,14 +821,16 @@ def create_app(signals: dict[str, SignalFrame] | None = None,
 
 def launch_dashboard(signal: SignalFrame | None = None,
                      detector: str = "isolation_forest",
-                     port: int = 8050, debug: bool = False) -> None:
+                     port: int = 8050, debug: bool = False,
+                     live: bool = True) -> None:
     """Launch the interactive dashboard in a local web server.
 
     ``signal`` (optional) is added to the signal browser alongside the
-    built-in synthetic demos and selected by default.
+    live open-data sources and selected by default. ``live=False`` skips
+    the network fetch (synthetic demos fill the browser instead).
     """
     signals = {}
     if signal is not None:
         signals[signal.name or "user signal"] = signal
-    app = create_app(signals, default_detector=detector)
+    app = create_app(signals, default_detector=detector, live=live)
     app.run(port=port, debug=debug)

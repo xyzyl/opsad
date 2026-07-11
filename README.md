@@ -28,17 +28,38 @@ result.plot()
 
 ## Features
 
-| Category | Included in v0.1.0 |
+| Category | Included in v0.2.0 |
 |---|---|
 | Data model | `SignalFrame` (units, sample rate, metadata, HDF5 persistence), `AnomalyResult` |
+| Live open data | NOAA solar wind (plasma), NDBC buoys (ocean), GOES magnetometer (satellite), Elexon GB grid frequency (energy) — no API keys |
 | Statistical detectors | `ZScoreDetector`, `ModifiedZScoreDetector`, `CUSUMDetector`, `STLResidualDetector` |
-| ML detectors | `IsolationForestDetector`, `LOFDetector` (windowed feature extraction) |
+| ML detectors | `IsolationForestDetector`, `LOFDetector` — configurable windowed features, multivariate mode |
+| Deep detectors | `AutoencoderDetector` (fc/conv1d), `LSTMAutoencoderDetector`, `TransformerDetector` (`sigmaflow[deep]`) |
+| Ensemble | `EnsembleDetector`: mean/max/voting/weighted over any detectors |
+| Domain adapters | Plasma, ocean, satellite, energy grid + `CustomAdapter` — validation, recommended pipelines, anomaly classification |
+| Feature extraction | `FeatureExtractor`: 17 windowed features (moments, spectral, autocorrelation, ...) |
 | Preprocessing | `Resampler` (anti-aliased), `GapHandler`, `Detrend`, `Normalizer` |
 | Pipelines | Composable, YAML-serializable, reproducible |
-| Evaluation | Point metrics (F1, MCC), event metrics (latency, fragmentation), AUC-ROC/PR |
-| Synthetic benchmarks | Plasma diagnostic and ocean buoy generators with ground-truth labels |
-| Dashboard | Interactive web dashboard: signal browser, live detector tuning, threshold control, click-to-zoom anomaly table |
-| CLI | `sigmaflow detect`, `sigmaflow evaluate`, `sigmaflow dashboard` |
+| Evaluation | Point, event, and range-based (Tatbul-style) metrics; AUC-ROC/PR; `compare_detectors` with tables and plots |
+| Benchmarks | NAB and SMD loaders (auto-download); synthetic generators for testing |
+| Streaming | `StreamingDetector`: online scoring of arriving chunks |
+| Dashboard | Interactive web dashboard on live data + static-site export with plain-language interpretation |
+| CLI | `sigmaflow detect`, `sigmaflow evaluate`, `sigmaflow dashboard [--export]` |
+
+## Live open data
+
+```python
+import sigmaflow as sf
+from sigmaflow.data import fetch_solar_wind   # also: fetch_ndbc_buoy,
+                                              # fetch_goes_magnetometer,
+                                              # fetch_gb_grid_frequency
+
+signal = fetch_solar_wind()          # real plasma streaming past Earth, right now
+result = sf.detect(signal, method="isolation_forest")
+```
+
+Four public feeds with attribution and fetch timestamps carried in metadata —
+see the [domain tutorials](docs/tutorials) for full worked examples.
 
 ## A complete pipeline
 
@@ -96,16 +117,18 @@ ground-truth bands, and click any row of the anomaly table to zoom to that event
 
 ### Publish it as a website
 
-`sigmaflow dashboard --export site` writes a static version (~1 MB, precomputed
-scores; thresholding, metrics, and interpretation run in the browser) that
+`sigmaflow dashboard --export site` fetches the live open-data feeds and writes
+a static version (~1 MB; real data snapshotted at build time with provenance
+notes; thresholding, metrics, and interpretation run in the browser) that
 deploys to Cloudflare Pages in one command:
 
 ```bash
 npx wrangler pages deploy site --project-name sigmaflow
 ```
 
-See [docs/deploying.md](docs/deploying.md) for details, including how to host
-the fully live app on a Python platform instead.
+Re-run export + deploy any time to refresh the site's data. See
+[docs/deploying.md](docs/deploying.md) for details, including how to host the
+fully live app on a Python platform instead.
 
 ## Documentation
 
@@ -117,13 +140,17 @@ the fully live app on a Python platform instead.
 ```bash
 pip install sigmaflow             # core (numpy, scipy, scikit-learn, pandas)
 pip install sigmaflow[dashboard]  # + interactive web dashboard
-pip install sigmaflow[deep]       # + deep learning detectors (coming in v0.2)
+pip install sigmaflow[deep]       # + deep learning detectors (PyTorch)
 pip install sigmaflow[dev]        # + test/lint tooling
 ```
 
 ## Roadmap
 
-v0.2.0 adds deep learning detectors, ensembles, and domain adapters for plasma, ocean, satellite, and energy-grid instruments; v0.3.0 adds range-based metrics and streaming detection. See [CHANGELOG.md](CHANGELOG.md).
+v0.2.0 delivers the full detector suite (statistical, ML, deep, ensemble),
+domain adapters, live open-data sources, range-based metrics, streaming
+detection, comparative evaluation, and benchmark loaders. Next: hosted docs
+(Sphinx/Read the Docs), NAB benchmark result tables, GPU acceleration and
+ONNX export. See [CHANGELOG.md](CHANGELOG.md).
 
 ## Citation
 
