@@ -47,9 +47,18 @@ DEFAULT_EXPORT_DETECTORS = [
 ]
 
 
-def _sig(x: float, digits: int = 5) -> float:
-    """Round to significant digits so the JSON stays small."""
-    return float(f"{float(x):.{digits}g}")
+def _sig(x: float, digits: int = 5) -> float | None:
+    """Round to significant digits so the JSON stays small.
+
+    Non-finite values become None (JSON null): Python's json module would
+    otherwise emit a literal ``NaN``, which browsers reject as invalid
+    JSON — live instrument feeds (buoys, magnetometers) routinely contain
+    missing samples.
+    """
+    x = float(x)
+    if not np.isfinite(x):
+        return None
+    return float(f"{x:.{digits}g}")
 
 
 def _slugify(name: str) -> str:
@@ -87,8 +96,12 @@ def _signal_payload(name: str, sf: SignalFrame,
     channels = {}
     for c in sf.channels:
         x = sf[c].to_numpy()
-        median = float(np.median(x))
-        mad = float(np.median(np.abs(x - median))) or float(np.std(x)) or 1.0
+        # nan-aware statistics: live feeds contain missing samples
+        median = float(np.nanmedian(x)) if np.isfinite(x).any() else 0.0
+        mad = float(np.nanmedian(np.abs(x - median)))
+        if not np.isfinite(mad) or mad == 0:
+            std = float(np.nanstd(x))
+            mad = std / 1.4826 if np.isfinite(std) and std > 0 else 1.0
         channels[c] = {
             "values": [_sig(v, 6) for v in x],
             "unit": sf.units.get(c, ""),
@@ -179,12 +192,17 @@ def export_static_site(output_dir: str,
         payload = _signal_payload(name, sf, detector_names)
         payload["slug"] = slug
         with open(out / "data" / f"{slug}.json", "w", encoding="utf-8") as f:
-            json.dump(payload, f, separators=(",", ":"))
+            # allow_nan=False: a stray NaN would render the file unparseable
+            # in browsers — better to fail the export than publish it
+            json.dump(payload, f, separators=(",", ":"), allow_nan=False)
         manifest_signals.append({"slug": slug, "name": name})
 
     # domain-meaning table with a JSON-safe key for the fallback entry
     domain_meaning = {(k or "generic"): v for k, v in DOMAIN_MEANING.items()}
+    from datetime import datetime, timezone
+
     manifest = {
+        "buildId": datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S"),
         "signals": manifest_signals,
         "detectors": detector_names,
         "explainers": DETECTOR_EXPLAINERS,

@@ -74,6 +74,20 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   <h1>sigmaflow dashboard</h1>
   <span class="sub">interactive anomaly detection on live open data</span>
 </div>
+<div class="card" style="margin-bottom:16px; max-width:none">
+  <div class="label" style="margin-top:0">why this, and not any anomaly detector?</div>
+  <div style="font-size:.85rem; line-height:1.5; color:var(--ink2); max-width:90ch">
+    Generic anomaly tools treat a plasma stream, an ocean record, and a grid
+    frequency as interchangeable columns of numbers &mdash; blind to units, sampling,
+    and the ways instruments fail. sigmaflow pairs <strong>one detection engine with
+    domain knowledge</strong>: the same algorithms you can switch between below are
+    triaging a solar-wind shock, a fouled buoy sensor, and a tripped generator &mdash;
+    structurally identical problems normally attacked by four separate research
+    communities with four incompatible toolchains. One API, one mental model,
+    honest evaluation &mdash; and every signal on this page is live instrument data,
+    not a curated demo.
+  </div>
+</div>
 <div class="row">
   <div class="card sidebar">
     <div class="label">signal</div>
@@ -165,7 +179,9 @@ function fmtTime(t,isDt){
   return "t = "+(+Number(t).toPrecision(4))+" s";
 }
 function characterize(values,i0,i1,median,scale){
-  const seg=values.slice(i0,i1+1);
+  // live feeds contain missing samples (null) — judge only real readings
+  const seg=values.slice(i0,i1+1).filter(Number.isFinite);
+  if(!seg.length) return "flat";  // an all-missing stretch is a dead feed
   const mx=Math.max(...seg), mn=Math.min(...seg);
   if(seg.length>=4 && (mx-mn)<1e-12*Math.max(1,Math.abs(seg[0]))) return "flat";
   if(seg.length<=3) return "spike";
@@ -374,8 +390,18 @@ function render(){
 
 // ------------------------------------------------------------ wiring
 async function loadSignal(slug){
-  const res=await fetch(`data/${slug}.json`);
-  state.data=await res.json();
+  try{
+    // buildId busts stale caches after a redeploy
+    const res=await fetch(`data/${slug}.json?v=${MANIFEST.buildId||0}`);
+    if(!res.ok) throw new Error(`HTTP ${res.status}`);
+    state.data=await res.json();
+  }catch(err){
+    $("narrative").innerHTML=`<p>Could not load this signal (${err.message}). `+
+      `Try another signal, or rebuild the site with `+
+      `<code>sigmaflow dashboard --export</code>.</p>`;
+    $("source-note").textContent="";
+    return;
+  }
   const chans=Object.keys(state.data.channels);
   $("channel-select").innerHTML=chans.map(c=>`<option>${c}</option>`).join("");
   state.channel=chans[0];

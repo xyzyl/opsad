@@ -103,6 +103,33 @@ def test_payload_without_truth(simple_signal):
     assert payload["source_note"] == ""
 
 
+def test_nan_values_export_as_valid_json(rng):
+    """Regression: live feeds contain NaN samples; Python's json module
+    would emit literal `NaN`, which browsers reject — the ocean signal's
+    channel dropdown silently stopped updating because of this."""
+    from sigmaflow import SignalFrame
+
+    y = rng.normal(15.0, 1.0, 500)
+    y[100:120] = np.nan  # telemetry dropout, as in real NDBC data
+    sf = SignalFrame(time=np.arange(500.0), values={"water_temperature": y})
+    payload = _signal_payload("buoy", sf, CLASSIC[:2])
+
+    text = json.dumps(payload, allow_nan=False)  # must not raise
+    back = json.loads(text)
+    vals = back["channels"]["water_temperature"]["values"]
+    assert vals[110] is None                      # missing -> null
+    assert vals[0] is not None
+    # nan-aware stats stay finite despite the gap
+    assert np.isfinite(back["channels"]["water_temperature"]["median"])
+    assert back["channels"]["water_temperature"]["scale"] > 0
+
+
+def test_why_section_present(site):
+    html = (site / "index.html").read_text(encoding="utf-8")
+    assert "why this, and not any anomaly detector?" in html
+    assert "one detection engine with" in html
+
+
 def test_cli_export_no_live(tmp_path):
     """--no-live with a user file exports that file without touching the net."""
 

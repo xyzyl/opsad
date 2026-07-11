@@ -697,6 +697,23 @@ def create_app(signals: dict[str, SignalFrame] | None = None,
                 html.Span("interactive anomaly detection",
                           style={"fontSize": "0.85rem", "color": C["muted"]}),
             ]),
+            html.Div(style={**card_style, "marginBottom": "16px"}, children=[
+                html.Div("why this, and not any anomaly detector?",
+                         style={**label_style, "marginTop": "0"}),
+                html.Div(
+                    ["Generic anomaly tools treat a plasma stream, an ocean record, "
+                     "and a grid frequency as interchangeable columns of numbers — "
+                     "blind to units, sampling, and the ways instruments fail. "
+                     "sigmaflow pairs ", html.Strong("one detection engine with "
+                     "domain knowledge"), ": the same algorithms you can switch "
+                     "between below are triaging a solar-wind shock, a fouled buoy "
+                     "sensor, and a tripped generator — structurally identical "
+                     "problems normally attacked by four separate research "
+                     "communities with four incompatible toolchains."],
+                    style={"fontSize": "0.85rem", "lineHeight": "1.5",
+                           "color": C["ink2"], "maxWidth": "90ch"},
+                ),
+            ]),
             dcc.Store(id="score-store"),
             html.Div(style={"display": "flex", "gap": "16px",
                             "alignItems": "flex-start", "flexWrap": "wrap"},
