@@ -28,7 +28,7 @@ result.plot()
 
 ## Features
 
-| Category | Included in v0.2.0 |
+| Category | Included in v0.2.0 | 
 |---|---|
 | Data model | `SignalFrame` (units, sample rate, metadata, HDF5 persistence), `AnomalyResult` |
 | Live open data | NOAA solar wind (plasma), NDBC buoys (ocean), GOES magnetometer (satellite), Elexon GB grid frequency (energy) — no API keys |
